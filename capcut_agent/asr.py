@@ -25,8 +25,10 @@ from .env_check import detect_track
 
 CACHE_DIR = Path(os.environ.get("CAPCUT_AGENT_CACHE", Path(__file__).resolve().parent.parent / ".cache")) / "asr"
 DEFAULT_MODELS = {"mlx": "mlx-community/whisper-large-v3-turbo", "faster": "large-v3-turbo"}
-# 한국어 구두점/띄어쓰기를 유도하는 짧은 프롬프트
-INITIAL_PROMPT = "안녕하세요. 오늘은 영상 편집에 대해서 이야기해 볼게요."
+# 한국어 구두점/띄어쓰기 + 군말 전사 유도 (whisper 는 기본적으로 "음/어"를 지워버린다 → 잔말 감지 불가)
+INITIAL_PROMPT = "음, 안녕하세요. 어, 오늘은 음 영상 편집에 대해서 이야기해 볼게요."
+# 프롬프트/후처리가 바뀌면 올린다 → 캐시 무효화
+ASR_VERSION = "v2"
 
 _LOCK = threading.Lock()
 _MODELS: dict[str, object] = {}
@@ -93,7 +95,7 @@ def pick_backend() -> tuple[str, str]:
 
 def cache_path(content_hash: str, backend: str, model: str) -> Path:
     safe = re.sub(r"[^\w.-]+", "_", model)
-    return CACHE_DIR / f"{content_hash}.{backend}.{safe}.json"
+    return CACHE_DIR / f"{content_hash}.{backend}.{safe}.{ASR_VERSION}.json"
 
 
 # ── backends ────────────────────────────────────────────────────────────────

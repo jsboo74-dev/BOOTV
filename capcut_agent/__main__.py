@@ -11,6 +11,7 @@ import time
 from .asr import transcribe
 from .draft import build_draft, probe
 from .env_check import capcut_draft_root
+from .filler import analyze, apply_cuts
 from .silence import SilenceParams, detect_silences, keep_ranges
 
 
@@ -24,7 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-keep", type=float, default=d.min_keep, help="버릴 짧은 구간 s")
     ap.add_argument("--out", help="드래프트 루트 (기본: 캡컷 드래프트 폴더)")
     ap.add_argument("--name", help="드래프트 이름")
-    ap.add_argument("--no-asr", action="store_true", help="대본/자막 생략 (1단 동작)")
+    ap.add_argument("--no-asr", action="store_true", help="대본/자막/잔말 생략 (1단 동작)")
+    ap.add_argument("--no-filler", action="store_true", help="잔말(음/어/반복) 컷 끄기")
+    ap.add_argument("--no-ng", action="store_true", help="NG(다시 시작한 문장) 컷 끄기")
     a = ap.parse_args(argv)
 
     out = a.out or capcut_draft_root()
@@ -47,7 +50,17 @@ def main(argv: list[str] | None = None) -> int:
               f"  ({time.time() - t0:.1f}s, {tr.backend}:{tr.model})")
         print(f"         {tr.text[:120]}{'…' if len(tr.text) > 120 else ''}")
 
-    r = build_draft(a.input, keeps, str(out), a.name, tr)
+    final = keeps
+    if tr is not None:
+        an = analyze(tr, not a.no_filler, not a.no_ng)
+        final = apply_cuts(keeps, an.cuts, an.kept_words())
+        c = an.counts()
+        removed = sum(y - x for x, y in keeps) - sum(y - x for x, y in final)
+        print(f"filler   잔말 {c['filler'] + c['stutter']} · NG {c['ng']} → −{removed:.1f}s")
+        for cut in an.cuts:
+            print(f"         {cut.kind:<8}{cut.start:7.2f}–{cut.end:<7.2f} {cut.text}")
+
+    r = build_draft(a.input, final, str(out), a.name, tr)
     cut = r["source_sec"] - r["output_sec"]
     print(f"draft    {r['draft_dir']}")
     print(f"         {r['source_sec']}s → {r['output_sec']}s  (−{cut:.1f}s, {cut / max(r['source_sec'], 1e-9):.0%})"

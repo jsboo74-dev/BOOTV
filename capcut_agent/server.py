@@ -26,6 +26,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from .asr import pick_backend, transcribe
 from .draft import build_draft, probe
 from .env_check import capcut_draft_root, detect_track
+from .filler import analyze, apply_cuts
 from .silence import SilenceParams, detect_silences, keep_ranges
 
 ROOT = Path(__file__).resolve().parent
@@ -55,6 +56,8 @@ class Job:
     params: SilenceParams
     cache_hit: bool
     content_hash: str
+    use_filler: bool = True
+    use_ng: bool = True
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     done: bool = False
@@ -82,10 +85,8 @@ async def _step(job: Job, name: str, fn: Callable[[], Awaitable[Any]]) -> Any:
     return result
 
 
-async def _skip(job: Job, name: str, detail: str) -> None:
-    await job.emit({"type": "step", "step": name, "status": "running"})
-    await asyncio.sleep(MIN_STEP_SEC)
-    await job.emit({"type": "step", "step": name, "status": "skipped", "detail": detail})
+def _total(ranges: list[tuple[float, float]]) -> float:
+    return sum(b - a for a, b in ranges)
 
 
 async def run_job(job: Job) -> None:
@@ -122,21 +123,28 @@ async def run_job(job: Job) -> None:
             return tr, d
 
         transcript = await _step(job, "asr", asr)
-        await job.emit({"type": "transcript", "text": transcript.text,
-                        "segments": [{"start": round(x.start, 2), "end": round(x.end, 2), "text": x.text.strip()}
-                                     for x in transcript.segments]})
         current = "filler"
-        await _skip(job, "filler", "4단 예정")
+
+        async def filler():
+            an = analyze(transcript, job.use_filler, job.use_ng)
+            final = apply_cuts(keeps, an.cuts, an.kept_words())
+            c = an.counts()
+            removed = _total(keeps) - _total(final)
+            return (an, final), f"잔말 {c['filler'] + c['stutter']} · NG {c['ng']} · −{removed:.1f}s"
+
+        analysis, final = await _step(job, "filler", filler)
         current = "draft"
         root, is_capcut = draft_root()
 
         async def draft():
-            r = await asyncio.to_thread(build_draft, str(job.src), keeps, str(root), None, transcript)
+            r = await asyncio.to_thread(build_draft, str(job.src), final, str(root), None, transcript)
             return r, f"{r['segments']}컷 · 자막 {r['subtitles']}"
 
         r = await _step(job, "draft", draft)
-        await job.emit({"type": "result", **r, "capcut_root": is_capcut,
-                        "cache_hit": job.cache_hit})
+        await job.emit({"type": "result", **r, "capcut_root": is_capcut, "cache_hit": job.cache_hit,
+                        "silence_cut_sec": round(info.duration - _total(keeps), 2),
+                        "filler_cut_sec": round(_total(keeps) - _total(final), 2),
+                        "analysis": analysis.to_dict()})
     except Exception as e:  # noqa: BLE001 — 사용자에게 그대로 보여준다
         await job.emit({"type": "step", "step": current, "status": "error", "detail": str(e)})
         await job.emit({"type": "error", "message": str(e)})
@@ -191,9 +199,11 @@ def env() -> dict:
 
 @app.post("/api/jobs")
 async def create_job(file: UploadFile, noise: float = Form(-35.0),
-                     min_silence: float = Form(0.45), pad: float = Form(0.12)) -> dict:
+                     min_silence: float = Form(0.45), pad: float = Form(0.12),
+                     filler: bool = Form(True), ng: bool = Form(True)) -> dict:
     src, hit, digest = await save_upload(file)
-    job = Job(uuid.uuid4().hex[:12], src, SilenceParams(noise, min_silence, pad), hit, digest)
+    job = Job(uuid.uuid4().hex[:12], src, SilenceParams(noise, min_silence, pad), hit, digest,
+              use_filler=filler, use_ng=ng)
     JOBS[job.id] = job
     asyncio.create_task(run_job(job))
     return {"job_id": job.id, "cache_hit": hit}
