@@ -33,9 +33,21 @@ python -m capcut_agent 내영상.mp4
 - [ ] 컷 경계에서 말끝/말머리 잘림 없음 (잘리면 `--pad` ↑)
 - [ ] 무음이 덜 잘리면 `--noise` ↑(예: -30), 너무 잘리면 ↓(예: -40)
 
+## 2단 — 로컬 웹
+
+```bash
+python -m capcut_agent.server      # → http://127.0.0.1:8765 자동으로 열림
+```
+
+영상을 끌어다 놓으면 `upload → silence → asr → filler → draft` 순서로 진행 상황이 표시됨 (SSE).
+- asr / filler는 3·4단 전까지 `예정`으로 건너뜀
+- 업로드는 content hash(sha256)로 `.cache/uploads/`에 저장 → 같은 영상을 다시 올리면 `캐시 hit`
+- 단계당 최소 0.5s → 캐시 hit여도 단계 진행이 눈에 보임
+- 결과 카드: 원본/결과/컷 3컬럼 + 드래프트 경로 복사 · 폴더 열기
+
 ## 로드맵
 1. ✅ silence_detect + build_draft
-2. FastAPI + 정적 HTML (drag/drop + SSE stepper)
+2. ✅ FastAPI + 정적 HTML (drag/drop + SSE stepper)
 3. whisper Transcript + 세그먼트 자막
 4. filler/NG 통합 컷 + transcript 카드
 5. 영상 프리뷰 + 보존 구간 마킹 (`[` / `]`)

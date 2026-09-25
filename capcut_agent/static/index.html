@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>캡컷 에이전트</title>
+<link rel="icon" href="data:,">
+<style>
+  :root {
+    --bg: #0a0a0a;
+    --card: #161616;
+    --line: #262626;
+    --text: #ededed;
+    --muted: #8a8a8a;
+    --faint: #4a4a4a;
+    --accent: #22c55e;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Pretendard", "Apple SD Gothic Neo",
+          "Segoe UI", "Malgun Gothic", sans-serif;
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 56px 16px 80px; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 28px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  .env { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; }
+
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--faint); flex: none; }
+  .dot.on { background: var(--accent); box-shadow: 0 0 8px var(--accent); }
+  .dot.run { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1s ease-in-out infinite; }
+  .dot.skip { background: transparent; box-shadow: inset 0 0 0 1px var(--faint); }
+  .dot.err { background: var(--text); }
+  @keyframes pulse { 50% { opacity: .35; box-shadow: 0 0 2px var(--accent); } }
+
+  code, .chip {
+    font-family: var(--mono); font-size: 12px;
+    background: #1f1f1f; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1px 6px; color: var(--text);
+  }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 20px; }
+  .card + .card { margin-top: 12px; }
+  hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+  .label { font-size: 12px; color: var(--muted); }
+
+  /* drop */
+  #drop { cursor: pointer; transition: border-color .15s; text-align: center; padding: 44px 20px; }
+  #drop.over { border-color: var(--accent); }
+  #drop .big { font-size: 15px; font-weight: 500; }
+  #drop .sub { color: var(--muted); font-size: 12px; margin-top: 4px; }
+  #drop.busy { cursor: default; }
+
+  .params { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .params label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .params input {
+    width: 100%; background: transparent; color: var(--text);
+    border: 0; border-bottom: 1px solid var(--line); padding: 4px 0;
+    font: 13px var(--mono); font-variant-numeric: tabular-nums; outline: none;
+  }
+  .params input:focus { border-bottom-color: var(--accent); }
+
+  /* stepper */
+  .row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--line); }
+  .row:first-child { border-top: 0; padding-top: 0; }
+  .row:last-child { padding-bottom: 0; }
+  .row .name { font-family: var(--mono); font-size: 13px; width: 64px; }
+  .row .ko { color: var(--muted); font-size: 13px; flex: 1; }
+  .row .detail { color: var(--muted); font-size: 12px; text-align: right; }
+  .row.pending .name, .row.skipped .name { color: var(--faint); }
+  .row.error .detail { color: var(--text); }
+  .bar { height: 1px; background: var(--line); margin-top: 16px; position: relative; overflow: hidden; }
+  .bar i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--accent); transition: width .1s; }
+
+  /* result */
+  .title { font-size: 15px; font-weight: 600; word-break: break-all; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .stat .v { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+  .stat .v small { font-size: 12px; font-weight: 400; color: var(--muted); margin-left: 2px; }
+  .pathrow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .pathrow code { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button {
+    background: transparent; color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+    padding: 5px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .note { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  .actions { display: flex; gap: 8px; margin-top: 16px; }
+  .warn { color: var(--muted); font-size: 12px; margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+  [hidden] { display: none !important; }
+
+  @media (max-width: 520px) {
+    main { padding-top: 32px; }
+    header { flex-direction: column; align-items: flex-start; }
+    .params, .stats { gap: 10px; }
+    .stat .v { font-size: 18px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>캡컷 에이전트</h1>
+    <div class="env"><span class="dot" id="envDot"></span><span id="envText">환경 확인 중</span></div>
+  </header>
+
+  <section class="card" id="drop" tabindex="0">
+    <div class="big" id="dropTitle">mp4 / mov 끌어놓기</div>
+    <div class="sub" id="dropSub">또는 클릭해서 선택 · 한국어 토킹 영상</div>
+    <input type="file" id="file" accept=".mp4,.mov,.m4v,video/mp4,video/quicktime" hidden>
+  </section>
+
+  <section class="card" id="paramCard">
+    <div class="params">
+      <div><label for="noise">무음 기준 dB</label><input id="noise" type="number" step="1"></div>
+      <div><label for="minSil">최소 무음 s</label><input id="minSil" type="number" step="0.05" min="0.1"></div>
+      <div><label for="pad">앞뒤 여유 s</label><input id="pad" type="number" step="0.02" min="0"></div>
+    </div>
+    <div class="warn" id="rootWarn" hidden><span class="dot"></span><span></span></div>
+  </section>
+
+  <section class="card" id="stepCard" hidden>
+    <div id="steps"></div>
+    <div class="bar" id="bar" hidden><i></i></div>
+  </section>
+
+  <section class="card" id="resultCard" hidden>
+    <div class="label">드래프트</div>
+    <div class="title" id="rTitle"></div>
+    <hr>
+    <div class="stats">
+      <div class="stat"><div class="label">원본</div><div class="v" id="sSrc"></div></div>
+      <div class="stat"><div class="label">결과</div><div class="v" id="sOut"></div></div>
+      <div class="stat"><div class="label">컷</div><div class="v" id="sCut"></div></div>
+    </div>
+    <hr>
+    <div class="pathrow"><code id="rPath"></code><button id="copyBtn">복사</button><button id="revealBtn">폴더 열기</button></div>
+    <div class="note">캡컷을 완전히 종료 → 재실행 → 목록에서 열고 <b>직접 재생</b>해서 확인. 빌드 성공 ≠ 검증.</div>
+    <div class="actions"><button class="primary" id="againBtn">다른 영상</button></div>
+  </section>
+</main>
+
+<script>
+const STEP_KO = { upload: "업로드", silence: "무음 감지", asr: "대본 추출", filler: "잔말 · NG", draft: "드래프트 + 자막" };
+const $ = (id) => document.getElementById(id);
+let env = null, busy = false;
+
+const fmt = (s) => {
+  s = Math.max(0, s);
+  const m = Math.floor(s / 60), r = s - m * 60;
+  return m ? `${m}:${r.toFixed(1).padStart(4, "0")}` : `${r.toFixed(1)}s`;
+};
+
+async function loadEnv() {
+  env = await (await fetch("/api/env")).json();
+  $("envDot").className = "dot " + (env.capcut_root ? "on" : "");
+  $("envText").innerHTML = `트랙 ${env.track} · <code>${env.asr}</code>`;
+  $("noise").value = env.defaults.noise;
+  $("minSil").value = env.defaults.min_silence;
+  $("pad").value = env.defaults.pad;
+  if (!env.capcut_root) {
+    $("rootWarn").hidden = false;
+    $("rootWarn").lastElementChild.innerHTML = `캡컷 드래프트 폴더 없음 → <code>${env.draft_root}</code> 에 저장`;
+  }
+}
+
+function renderSteps() {
+  const names = ["upload", ...env.steps];
+  $("steps").innerHTML = names.map((n) => `
+    <div class="row pending" data-step="${n}">
+      <span class="dot"></span><span class="name">${n}</span>
+      <span class="ko">${STEP_KO[n] || ""}</span><span class="detail"></span>
+    </div>`).join("");
+}
+
+function setStep(name, status, detail = "") {
+  const row = document.querySelector(`.row[data-step="${name}"]`);
+  if (!row) return;
+  row.className = "row " + status;
+  row.querySelector(".dot").className = "dot " +
+    ({ running: "run", done: "on", skipped: "skip", error: "err" }[status] || "");
+  row.querySelector(".detail").textContent = detail;
+}
+
+function reset() {
+  busy = false;
+  $("drop").classList.remove("busy");
+  $("dropTitle").textContent = "mp4 / mov 끌어놓기";
+  $("dropSub").textContent = "또는 클릭해서 선택 · 한국어 토킹 영상";
+  $("paramCard").hidden = false;
+  $("stepCard").hidden = true;
+  $("resultCard").hidden = true;
+  $("file").value = "";
+}
+
+function upload(file) {
+  return new Promise((resolve, reject) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("noise", $("noise").value);
+    fd.append("min_silence", $("minSil").value);
+    fd.append("pad", $("pad").value);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", "/api/jobs");
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const p = e.loaded / e.total;
+      $("bar").firstElementChild.style.width = (p * 100).toFixed(1) + "%";
+      setStep("upload", "running", `${Math.round(p * 100)}%`);
+    };
+    xhr.onload = () => xhr.status < 300 ? resolve(JSON.parse(xhr.responseText))
+      : reject(new Error((() => { try { return JSON.parse(xhr.responseText).detail; } catch { return xhr.statusText; } })()));
+    xhr.onerror = () => reject(new Error("업로드 실패"));
+    xhr.send(fd);
+  });
+}
+
+async function start(file) {
+  if (busy || !file) return;
+  if (!/\.(mp4|mov|m4v)$/i.test(file.name)) { alert("mp4 / mov 만 지원"); return; }
+  busy = true;
+  $("drop").classList.add("busy");
+  $("dropTitle").textContent = file.name;
+  $("dropSub").textContent = `${(file.size / 1e6).toFixed(1)} MB`;
+  $("paramCard").hidden = true;
+  $("resultCard").hidden = true;
+  $("stepCard").hidden = false;
+  $("bar").hidden = false;
+  renderSteps();
+
+  let job;
+  try {
+    job = await upload(file);
+  } catch (e) {
+    setStep("upload", "error", e.message);
+    busy = false; $("drop").classList.remove("busy");
+    return;
+  }
+  $("bar").hidden = true;
+  setStep("upload", "done", job.cache_hit ? "캐시 hit" : `${(file.size / 1e6).toFixed(0)} MB`);
+
+  const es = new EventSource(`/api/jobs/${job.job_id}/events`);
+  es.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.type === "step") {
+      const d = ev.status === "done" && ev.sec != null ? `${ev.detail} · ${ev.sec.toFixed(1)}s` : (ev.detail || "");
+      setStep(ev.step, ev.status, d);
+    } else if (ev.type === "result") {
+      showResult(ev);
+    } else if (ev.type === "error") {
+      busy = false; $("drop").classList.remove("busy");
+    }
+  };
+  es.addEventListener("end", () => es.close());
+  es.onerror = () => es.close();
+}
+
+function showResult(r) {
+  const cut = r.source_sec - r.output_sec;
+  $("rTitle").textContent = r.draft_name;
+  $("sSrc").textContent = fmt(r.source_sec);
+  $("sOut").textContent = fmt(r.output_sec);
+  $("sCut").innerHTML = `${r.segments}<small>−${Math.round(cut / Math.max(r.source_sec, 1e-9) * 100)}%</small>`;
+  $("rPath").textContent = r.draft_dir;
+  $("rPath").title = r.draft_dir;
+  $("resultCard").hidden = false;
+  busy = false;
+}
+
+// events
+const drop = $("drop");
+drop.addEventListener("click", () => !busy && $("file").click());
+drop.addEventListener("keydown", (e) => (e.key === "Enter" || e.key === " ") && !busy && $("file").click());
+$("file").addEventListener("change", (e) => start(e.target.files[0]));
+["dragenter", "dragover"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); if (!busy) drop.classList.add("over"); }));
+["dragleave", "drop"].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", (e) => start(e.dataTransfer.files[0]));
+window.addEventListener("dragover", (e) => e.preventDefault());
+window.addEventListener("drop", (e) => e.preventDefault());
+
+$("againBtn").onclick = reset;
+$("copyBtn").onclick = async () => {
+  try { await navigator.clipboard.writeText($("rPath").textContent); $("copyBtn").textContent = "복사됨"; }
+  catch { $("copyBtn").textContent = "실패"; }
+  setTimeout(() => ($("copyBtn").textContent = "복사"), 1200);
+};
+$("revealBtn").onclick = () => fetch("/api/reveal", {
+  method: "POST", headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ path: $("rPath").textContent }),
+});
+
+loadEnv();
+</script>
+</body>
+</html>
