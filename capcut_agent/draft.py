@@ -6,6 +6,7 @@
 - Mac 샌드박스: 캡컷이 외부 경로 미디어를 못 여는 경우가 있다 → 원본을 드래프트 폴더
   안 materials/ 로 복사(가능하면 하드링크)하고 그 경로를 참조한다.
 - 컷 경계는 프레임 단위로 스냅 → 타임라인에 1프레임 틈/겹침이 생기지 않게.
+- 자막 위치 transform_y 는 '캔버스 높이의 절반' 단위, 음수 = 아래.
 """
 from __future__ import annotations
 
@@ -19,6 +20,9 @@ from pathlib import Path
 
 import pycapcut as cc
 import pymediainfo
+
+from .asr import Transcript
+from .subtitles import Cue, Piece, build_cues
 
 
 @dataclass
@@ -63,8 +67,39 @@ def _unique_name(root: Path, base: str) -> str:
     return name
 
 
+def plan_timeline(keeps: list[tuple[float, float]], fps: float, material_dur_us: int) -> list[Piece]:
+    """보존 구간(초) → 프레임 스냅된 타임라인 조각(µs). 조각끼리 틈 없이 이어진다."""
+    us_per_frame = 1_000_000 / fps
+    fr = lambda f: round(f * us_per_frame)  # noqa: E731  frame → µs
+    pieces: list[Piece] = []
+    cursor = 0  # 타임라인 누적 프레임
+    for a, b in keeps:
+        f0, f1 = round(a * fps), round(b * fps)
+        n = f1 - f0
+        if n <= 0:
+            continue
+        src = fr(f0)
+        dur = min(fr(cursor + n) - fr(cursor), material_dur_us - src)
+        if dur <= 0:
+            continue
+        pieces.append(Piece(src, fr(cursor), dur))
+        cursor += n
+    return pieces
+
+
+def _subtitle_style(m: MediaInfo) -> dict:
+    vertical = m.height > m.width
+    return dict(
+        style=cc.TextStyle(size=9.0 if vertical else 7.0, bold=True, align=1,
+                           auto_wrapping=True, max_line_width=0.82),
+        border=cc.TextBorder(width=40.0),
+        # transform_y 단위 = 캔버스 높이의 절반, 음수가 아래. 세로 영상은 쇼츠 UI 피해서 조금 위로.
+        clip_settings=cc.ClipSettings(transform_y=-0.55 if vertical else -0.8),
+    )
+
+
 def build_draft(src_path: str, keeps: list[tuple[float, float]], draft_root: str,
-                draft_name: str | None = None) -> dict:
+                draft_name: str | None = None, transcript: Transcript | None = None) -> dict:
     src = Path(src_path).resolve()
     root = Path(draft_root).expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -80,24 +115,19 @@ def build_draft(src_path: str, keeps: list[tuple[float, float]], draft_root: str
     material = cc.VideoMaterial(str(media))
     script.add_track(cc.TrackType.video)
 
-    us_per_frame = 1_000_000 / m.fps
-    fr = lambda f: round(f * us_per_frame)  # noqa: E731  frame → µs
-    cursor = 0  # 타임라인 누적 프레임
-    for a, b in keeps:
-        f0, f1 = round(a * m.fps), round(b * m.fps)
-        n = f1 - f0
-        if n <= 0:
-            continue
-        src_start = fr(f0)
-        dur = fr(cursor + n) - fr(cursor)
-        dur = min(dur, material.duration - src_start)
-        if dur <= 0:
-            continue
-        seg = cc.VideoSegment(material,
-                              cc.Timerange(fr(cursor), dur),
-                              source_timerange=cc.Timerange(src_start, dur))
-        script.add_segment(seg)
-        cursor += n
+    pieces = plan_timeline(keeps, m.fps, material.duration)
+    for p in pieces:
+        script.add_segment(cc.VideoSegment(material, cc.Timerange(p.tl, p.dur),
+                                           source_timerange=cc.Timerange(p.src, p.dur)))
+
+    cues: list[Cue] = []
+    if transcript is not None:
+        cues = build_cues(transcript, pieces, max_chars=16 if m.height > m.width else 24)
+        if cues:
+            script.add_track(cc.TrackType.text, "자막")
+            st = _subtitle_style(m)
+            for c in cues:
+                script.add_segment(cc.TextSegment(c.text, cc.Timerange(c.start, c.end - c.start), **st), "자막")
 
     script.save()
     content_path = draft_dir / "draft_content.json"
@@ -122,7 +152,8 @@ def build_draft(src_path: str, keeps: list[tuple[float, float]], draft_root: str
     return {
         "draft_name": name,
         "draft_dir": str(draft_dir),
-        "segments": len(keeps),
+        "segments": len(pieces),
+        "subtitles": len(cues),
         "source_sec": round(m.duration, 2),
         "output_sec": round(total_us / 1e6, 2),
         "canvas": f"{m.width}x{m.height}@{m.fps:g}",

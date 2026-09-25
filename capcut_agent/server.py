@@ -23,6 +23,7 @@ from typing import Any, Awaitable, Callable
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 
+from .asr import pick_backend, transcribe
 from .draft import build_draft, probe
 from .env_check import capcut_draft_root, detect_track
 from .silence import SilenceParams, detect_silences, keep_ranges
@@ -53,6 +54,7 @@ class Job:
     src: Path
     params: SilenceParams
     cache_hit: bool
+    content_hash: str
     events: list[dict] = field(default_factory=list)
     cond: asyncio.Condition = field(default_factory=asyncio.Condition)
     done: bool = False
@@ -64,6 +66,8 @@ class Job:
 
 
 JOBS: dict[str, Job] = {}
+# whisper 는 동시 호출 시 segfault (numba/mlx 비안전) → 프로세스 전체에서 한 번에 하나
+ASR_LOCK = asyncio.Lock()
 
 
 async def _step(job: Job, name: str, fn: Callable[[], Awaitable[Any]]) -> Any:
@@ -97,15 +101,38 @@ async def run_job(job: Job) -> None:
 
         keeps = await _step(job, "silence", silence)
         current = "asr"
-        await _skip(job, "asr", "3단 예정")
+        loop = asyncio.get_running_loop()
+        last_pct = [-1]
+
+        def on_progress(frac: float) -> None:
+            pct = int(frac * 100)
+            if pct != last_pct[0]:
+                last_pct[0] = pct
+                asyncio.run_coroutine_threadsafe(
+                    job.emit({"type": "step", "step": "asr", "status": "running", "detail": f"{pct}%"}), loop)
+
+        async def asr():
+            await job.emit({"type": "step", "step": "asr", "status": "running",
+                            "detail": pick_backend()[1].split("/")[-1]})
+            if ASR_LOCK.locked():
+                await job.emit({"type": "step", "step": "asr", "status": "running", "detail": "대기 중"})
+            async with ASR_LOCK:
+                tr, hit = await asyncio.to_thread(transcribe, job.src, job.content_hash, on_progress)
+            d = f"세그먼트 {len(tr.segments)} · 단어 {tr.word_count}" + (" · 캐시 hit" if hit else "")
+            return tr, d
+
+        transcript = await _step(job, "asr", asr)
+        await job.emit({"type": "transcript", "text": transcript.text,
+                        "segments": [{"start": round(x.start, 2), "end": round(x.end, 2), "text": x.text.strip()}
+                                     for x in transcript.segments]})
         current = "filler"
         await _skip(job, "filler", "4단 예정")
         current = "draft"
         root, is_capcut = draft_root()
 
         async def draft():
-            r = await asyncio.to_thread(build_draft, str(job.src), keeps, str(root))
-            return r, f"{r['segments']}컷"
+            r = await asyncio.to_thread(build_draft, str(job.src), keeps, str(root), None, transcript)
+            return r, f"{r['segments']}컷 · 자막 {r['subtitles']}"
 
         r = await _step(job, "draft", draft)
         await job.emit({"type": "result", **r, "capcut_root": is_capcut,
@@ -121,7 +148,7 @@ async def run_job(job: Job) -> None:
 
 # ── upload (content hash cache) ─────────────────────────────────────────────
 
-async def save_upload(f: UploadFile) -> tuple[Path, bool]:
+async def save_upload(f: UploadFile) -> tuple[Path, bool, str]:
     name = Path(f.filename or "video.mp4").name
     if Path(name).suffix.lower() not in ALLOWED_EXT:
         raise HTTPException(400, f"mp4 / mov 만 지원: {name}")
@@ -132,15 +159,16 @@ async def save_upload(f: UploadFile) -> tuple[Path, bool]:
         while chunk := await f.read(1 << 20):
             h.update(chunk)
             out.write(chunk)
-    dst_dir = UPLOADS / h.hexdigest()[:16]
+    digest = h.hexdigest()[:16]
+    dst_dir = UPLOADS / digest
     dst = dst_dir / name
     if dst_dir.exists() and any(dst_dir.iterdir()):
         existing = next(p for p in dst_dir.iterdir())
         tmp.unlink()
-        return existing, True
+        return existing, True, digest
     dst_dir.mkdir(parents=True, exist_ok=True)
     shutil.move(tmp, dst)
-    return dst, False
+    return dst, False, digest
 
 
 # ── routes ──────────────────────────────────────────────────────────────────
@@ -155,7 +183,8 @@ def env() -> dict:
     t = detect_track()
     root, is_capcut = draft_root()
     d = SilenceParams()
-    return {"track": t.code, "asr": t.asr, "label": t.label,
+    backend, model = pick_backend()
+    return {"track": t.code, "asr": t.asr, "asr_model": model, "label": t.label,
             "draft_root": str(root), "capcut_root": is_capcut, "steps": STEPS,
             "defaults": {"noise": d.noise_db, "min_silence": d.min_silence, "pad": d.pad}}
 
@@ -163,8 +192,8 @@ def env() -> dict:
 @app.post("/api/jobs")
 async def create_job(file: UploadFile, noise: float = Form(-35.0),
                      min_silence: float = Form(0.45), pad: float = Form(0.12)) -> dict:
-    src, hit = await save_upload(file)
-    job = Job(uuid.uuid4().hex[:12], src, SilenceParams(noise, min_silence, pad), hit)
+    src, hit, digest = await save_upload(file)
+    job = Job(uuid.uuid4().hex[:12], src, SilenceParams(noise, min_silence, pad), hit, digest)
     JOBS[job.id] = job
     asyncio.create_task(run_job(job))
     return {"job_id": job.id, "cache_hit": hit}

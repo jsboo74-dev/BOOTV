@@ -148,7 +148,7 @@
 <script>
 const STEP_KO = { upload: "업로드", silence: "무음 감지", asr: "대본 추출", filler: "잔말 · NG", draft: "드래프트 + 자막" };
 const $ = (id) => document.getElementById(id);
-let env = null, busy = false;
+let env = null, busy = false, transcript = null;
 
 const fmt = (s) => {
   s = Math.max(0, s);
@@ -160,6 +160,7 @@ async function loadEnv() {
   env = await (await fetch("/api/env")).json();
   $("envDot").className = "dot " + (env.capcut_root ? "on" : "");
   $("envText").innerHTML = `트랙 ${env.track} · <code>${env.asr}</code>`;
+  $("envText").title = env.asr_model;
   $("noise").value = env.defaults.noise;
   $("minSil").value = env.defaults.min_silence;
   $("pad").value = env.defaults.pad;
@@ -250,6 +251,8 @@ async function start(file) {
     if (ev.type === "step") {
       const d = ev.status === "done" && ev.sec != null ? `${ev.detail} · ${ev.sec.toFixed(1)}s` : (ev.detail || "");
       setStep(ev.step, ev.status, d);
+    } else if (ev.type === "transcript") {
+      transcript = ev;   // 4단에서 결과 카드에 노출
     } else if (ev.type === "result") {
       showResult(ev);
     } else if (ev.type === "error") {

@@ -1,4 +1,4 @@
-"""1단: 무음 컷 → 점프컷 캡컷 드래프트.
+"""무음 컷 + 대본 추출 + 세그먼트 자막 → 캡컷 드래프트.
 
     python -m capcut_agent input.mp4 [--noise -35] [--min-silence 0.45] [--pad 0.12] [--out DIR]
 """
@@ -8,6 +8,7 @@ import argparse
 import sys
 import time
 
+from .asr import transcribe
 from .draft import build_draft, probe
 from .env_check import capcut_draft_root
 from .silence import SilenceParams, detect_silences, keep_ranges
@@ -23,6 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--min-keep", type=float, default=d.min_keep, help="버릴 짧은 구간 s")
     ap.add_argument("--out", help="드래프트 루트 (기본: 캡컷 드래프트 폴더)")
     ap.add_argument("--name", help="드래프트 이름")
+    ap.add_argument("--no-asr", action="store_true", help="대본/자막 생략 (1단 동작)")
     a = ap.parse_args(argv)
 
     out = a.out or capcut_draft_root()
@@ -37,11 +39,19 @@ def main(argv: list[str] | None = None) -> int:
     keeps = keep_ranges(sil, dur, p)
     print(f"silence  {len(sil)}개 감지 → 보존 {len(keeps)}구간  ({time.time() - t0:.1f}s)")
 
-    r = build_draft(a.input, keeps, str(out), a.name)
+    tr = None
+    if not a.no_asr:
+        t0 = time.time()
+        tr, hit = transcribe(a.input)
+        print(f"asr      세그먼트 {len(tr.segments)} · 단어 {tr.word_count}{' · 캐시 hit' if hit else ''}"
+              f"  ({time.time() - t0:.1f}s, {tr.backend}:{tr.model})")
+        print(f"         {tr.text[:120]}{'…' if len(tr.text) > 120 else ''}")
+
+    r = build_draft(a.input, keeps, str(out), a.name, tr)
     cut = r["source_sec"] - r["output_sec"]
     print(f"draft    {r['draft_dir']}")
     print(f"         {r['source_sec']}s → {r['output_sec']}s  (−{cut:.1f}s, {cut / max(r['source_sec'], 1e-9):.0%})"
-          f"  · {r['segments']}컷 · {r['canvas']}")
+          f"  · {r['segments']}컷 · 자막 {r['subtitles']} · {r['canvas']}")
     print("\n▶ 캡컷을 (재)실행해서 드래프트 목록에서 열고 직접 재생해 확인하세요.")
     return 0
 

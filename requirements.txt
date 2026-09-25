@@ -4,3 +4,6 @@ imageio-ffmpeg>=0.5
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
+# ASR — 트랙 A(Mac M칩)는 mlx-whisper, 그 외는 faster-whisper
+mlx-whisper>=0.4; sys_platform == "darwin" and platform_machine == "arm64"
+faster-whisper>=1.1; sys_platform != "darwin" or platform_machine != "arm64"
