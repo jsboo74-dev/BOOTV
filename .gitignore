@@ -1,0 +1,6 @@
+models/
+__pycache__/
+*.mp4
+*.mov
+*.avi
+*.mkv
